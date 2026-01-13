@@ -95,9 +95,13 @@ op25_audio::op25_audio(const char* udp_host, int port, log_ts& logger, int debug
     d_write_sock(0),
     d_file_enabled(false),
     logts(logger),
+    d_imbe_enabled(false),
+    d_imbe_sock(0),
+    d_imbe_port(0),
     d_ws_enabled(false),
     d_ws_port(port)
 {
+    d_imbe_host[0] = 0;
     d_ws_connections.clear();
     char ip[20];
     if (hostname_to_ip(udp_host, ip) == 0)
@@ -115,6 +119,8 @@ op25_audio::~op25_audio()
     if (d_file_enabled)
         close(d_write_sock);
     close_socket();
+    if (d_imbe_enabled && d_imbe_sock > 0)
+        close(d_imbe_sock);
     ws_stop();
 }
 
@@ -128,12 +134,16 @@ op25_audio::op25_audio(const char* destination, log_ts& logger, int debug, int m
     d_write_sock(0),
     d_file_enabled(false),
     logts(logger),
+    d_imbe_enabled(false),
+    d_imbe_sock(0),
+    d_imbe_port(0),
     d_ws_enabled(false),
     d_ws_port(9000)
 {
     static const std::string P_UDP  = "udp";
     static const std::string P_FILE = "file";
     static const std::string P_WS   = "ws";
+    d_imbe_host[0] = 0;
     d_ws_host.clear();
     d_ws_connections.clear();
 
@@ -194,6 +204,9 @@ op25_audio::op25_audio(const char* destination, log_ts& logger, int debug, int m
             }
         }
     }
+
+    // Enable IMBE UDP output (hardcoded for testing)
+    set_imbe_destination("127.0.0.1", 9999);
 }
 // open udp socket and set up data structures
 void op25_audio::open_socket()
@@ -301,6 +314,61 @@ ssize_t op25_audio::send_audio_flag(const op25_audio::udpFlagEnumType udp_flag)
 {
     ws_send_audio_flag(udp_flag);
     return send_audio_flag_channel(udp_flag, 0);
+}
+
+// set IMBE UDP destination
+void op25_audio::set_imbe_destination(const char* host, int port)
+{
+    if (d_imbe_enabled && d_imbe_sock > 0) {
+        close(d_imbe_sock);
+        d_imbe_sock = 0;
+        d_imbe_enabled = false;
+    }
+
+    char ip[20];
+    if (hostname_to_ip(host, ip) != 0) {
+        fprintf(stderr, "op25_audio::set_imbe_destination: failed to resolve host %s\n", host);
+        return;
+    }
+
+    strncpy(d_imbe_host, ip, sizeof(d_imbe_host));
+    d_imbe_host[sizeof(d_imbe_host)-1] = 0;
+    d_imbe_port = port;
+
+    // open UDP socket for IMBE output
+    d_imbe_sock = socket(PF_INET, SOCK_DGRAM, 17);
+    if (d_imbe_sock < 0) {
+        fprintf(stderr, "op25_audio::set_imbe_destination: socket error: %d\n", errno);
+        d_imbe_sock = 0;
+        return;
+    }
+
+    memset(&d_imbe_sock_addr, 0, sizeof(d_imbe_sock_addr));
+    if (!inet_aton(d_imbe_host, &d_imbe_sock_addr.sin_addr)) {
+        fprintf(stderr, "op25_audio::set_imbe_destination: inet_aton: bad IP address\n");
+        close(d_imbe_sock);
+        d_imbe_sock = 0;
+        return;
+    }
+    d_imbe_sock_addr.sin_family = AF_INET;
+    d_imbe_sock_addr.sin_port = htons(d_imbe_port);
+
+    fprintf(stderr, "op25_audio::set_imbe_destination: enabled IMBE UDP output to %s:%d\n", d_imbe_host, d_imbe_port);
+    d_imbe_enabled = true;
+}
+
+// send IMBE frame data via UDP
+ssize_t op25_audio::send_imbe(const void *buf, size_t len)
+{
+    if (!d_imbe_enabled || d_imbe_sock <= 0 || len <= 0)
+        return 0;
+
+    ssize_t rc = sendto(d_imbe_sock, buf, len, 0, (struct sockaddr *)&d_imbe_sock_addr, sizeof(struct sockaddr_in));
+    if (rc == -1) {
+        fprintf(stderr, "%s op25_audio::send_imbe: length:(%lu): error:(%d): %s\n", logts.get(d_msgq_id), len, errno, strerror(errno));
+        rc = 0;
+    }
+    return rc;
 }
 
 // websocket message handler callback

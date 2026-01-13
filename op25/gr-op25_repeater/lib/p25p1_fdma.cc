@@ -554,7 +554,7 @@ namespace gr {
         }
 
         void p25p1_fdma::process_voice(const bit_vector& A, const frame_type fr_type) {
-            if (d_do_imbe || d_do_audio_output) {
+            if (d_do_imbe || d_do_audio_output || op25audio.imbe_enabled()) {
                 if (encrypted()) {
                     crypt_algs.prepare(ess_algid, ess_keyid, PT_P25_PHASE1, ess_mi);
                 }
@@ -569,6 +569,43 @@ namespace gr {
                     imbe_deinterleave(A, cw, i);
 
                     errs = imbe_header_decode(cw, u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], E0, ET);
+
+                    // Send raw IMBE frame via UDP if enabled
+                    if (op25audio.imbe_enabled()) {
+                        uint8_t imbe_pkt[27];
+                        packed_codeword p_cw;
+                        imbe_pack(p_cw, u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7]);
+
+                        // Magic "OP"
+                        imbe_pkt[0] = 0x4F;
+                        imbe_pkt[1] = 0x50;
+                        // NAC (big-endian)
+                        imbe_pkt[2] = (framer->nac >> 8) & 0xFF;
+                        imbe_pkt[3] = framer->nac & 0xFF;
+                        // Talkgroup ID (big-endian)
+                        imbe_pkt[4] = (vf_tgid >> 24) & 0xFF;
+                        imbe_pkt[5] = (vf_tgid >> 16) & 0xFF;
+                        imbe_pkt[6] = (vf_tgid >> 8) & 0xFF;
+                        imbe_pkt[7] = vf_tgid & 0xFF;
+                        // Source Radio ID (big-endian, 0 if unknown)
+                        imbe_pkt[8] = 0;
+                        imbe_pkt[9] = 0;
+                        imbe_pkt[10] = 0;
+                        imbe_pkt[11] = 0;
+                        // Frame Type (1=LDU1, 2=LDU2)
+                        imbe_pkt[12] = (fr_type == FT_LDU1) ? 1 : 2;
+                        // Voice Frame Index (0-8)
+                        imbe_pkt[13] = (uint8_t)i;
+                        // Flags (bit 0: encrypted, bit 1: call start, bit 2: call end)
+                        imbe_pkt[14] = encrypted() ? 0x01 : 0x00;
+                        // Reserved
+                        imbe_pkt[15] = 0;
+                        // IMBE Frame Data (11 bytes)
+                        for (int j = 0; j < 11; j++) {
+                            imbe_pkt[16 + j] = p_cw[j];
+                        }
+                        op25audio.send_imbe(imbe_pkt, 27);
+                    }
 
                     if (d_debug >= 9) {
                         packed_codeword p_cw;

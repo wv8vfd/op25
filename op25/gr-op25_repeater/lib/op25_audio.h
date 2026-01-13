@@ -56,6 +56,13 @@ private:
     struct      sockaddr_in d_sock_addr;
     log_ts&     logts;
 
+    // IMBE UDP output
+    bool        d_imbe_enabled;
+    int         d_imbe_sock;
+    int         d_imbe_port;
+    char        d_imbe_host[128];
+    struct      sockaddr_in d_imbe_sock_addr;
+
     void open_socket();
     void close_socket();
     ssize_t do_send(const void * bufp, size_t len, int port, bool is_ctrl);
@@ -91,6 +98,11 @@ public:
 
     ssize_t     send_audio_channel(const void *buf, size_t len, ssize_t slot_id);
     ssize_t     send_audio_flag_channel(const udpFlagEnumType udp_flag, ssize_t slot_id);
+
+    // IMBE frame output
+    void        set_imbe_destination(const char* host, int port);
+    ssize_t     send_imbe(const void *buf, size_t len);
+    inline bool imbe_enabled() const { return d_imbe_enabled; }
 
 }; // class op25_audio
 
